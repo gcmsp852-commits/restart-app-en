@@ -98,8 +98,8 @@
 
         /* ▼▼▼ 変更点：起動ボタンを薄緑色に指定、文字色を見やすく調整 ▼▼▼ */
 
-#startBtn { background: #2196F3; color: #ffffff; } 
-        #startBtn:active { background: #1976D2; }
+        #startBtn { background: #81C784; color: #121212; } 
+        #startBtn:active { background: #66BB6A; }
 
 
 
@@ -214,7 +214,9 @@
 
     
 
-let zxingMultiReader = null; // ZXingのみ使用（BarcodeDetectorは使わない）
+let codeReader = null;   // ★ZXingのブラウザ用QRリーダー
+let stopDecode = null;   // ★連続読み取り停止用
+let lastZXText = "";     // ★同じ結果の連続反映を抑制（任意）
 
 
 
@@ -249,41 +251,20 @@ async function startApp() {
 
 
 
- async function initEngines() {
+async function initEngines() {
+  // BarcodeDetector は使わない（常にローカルZXingを使用）
+  if (typeof ZXing === "undefined") {
+    alert("ZXingライブラリの読み込みに失敗しました。 ./index.min.js を確認してください。");
+    return;
+  }
 
-    // BarcodeDetector は使わない（常にローカルZXingを使用）
+  // ★ブラウザ向けの連続QRリーダー（安定）
+  codeReader = new ZXing.BrowserQRCodeReader();
 
-    if (typeof ZXing === 'undefined') {
-
-        alert("ZXingライブラリの読み込みに失敗しました。 ./zxing/index.min.js を確認してください。");
-
-        return;
-
-    }
-
-
-
-    zxingMultiReader = new ZXing.qrcode.QRCodeMultiReader();
-
-    document.getElementById('detectorInfo').innerText = "🐢 エンジン: ZXing（ローカル固定）";
-
+  document.getElementById("detectorInfo").innerText = "🐢 エンジン: ZXing（ローカル固定）";
 }
 
-function withTimeout(promise, ms, label = "処理") {
 
-  return Promise.race([
-
-    promise,
-
-    new Promise((_, reject) =>
-
-      setTimeout(() => reject(new Error(`${label}がタイムアウトしました（${ms}ms）`)), ms)
-
-    )
-
-  ]);
-
-}
 
 function withTimeout(promise, ms, label) {
   return Promise.race([
@@ -360,7 +341,58 @@ async function startCamera() {
   }
 }
 
+function startZXingContinuousDecode() {
+  const info = document.getElementById("detectorInfo");
+  if (!codeReader) {
+    info.innerText = "❌ ZXingリーダー未初期化";
+    return;
+  }
 
+  // 既に動いていたら止める
+  if (stopDecode) {
+    try { stopDecode(); } catch (_) {}
+    stopDecode = null;
+  }
+
+  // reset() で停止できるようにする
+  stopDecode = () => { try { codeReader.reset(); } catch (_) {} };
+
+  info.innerText = "🔎 読み取り待機中…（ZXing）";
+
+  // ★video要素から連続デコード
+  codeReader.decodeFromVideoElementContinuously(video, (result, err) => {
+    if (result) {
+      const text = result.getText();
+
+      // 同じ文字列を連発しない（任意）
+      if (text === lastZXText) return;
+      lastZXText = text;
+
+      // ResultPoints（取れない場合もある）
+      let pts = [];
+      try {
+        const rps = result.getResultPoints?.() || [];
+        pts = rps.map(p => ({ x: p.getX(), y: p.getY() }));
+      } catch (_) {}
+
+      const item = {
+        text,
+        points: pts,
+        center: pts.length ? getCenter(pts) : { x: 0, y: 0 }
+      };
+
+      processDetections([item]);
+      info.innerText = "✅ 読み取り中（ZXing）";
+      return;
+    }
+
+    // NotFoundException は「見つからない」だけなので黙る
+    if (err && err.name && err.name !== "NotFoundException") {
+      info.innerText = "⚠️ ZXingエラー: " + (err.message || err.name);
+      console.warn(err);
+    }
+  });
+}
 
     function getCenter(points) {
 
@@ -623,7 +655,8 @@ if (zxingMultiReader) {
 
 
     function showResultScreen() {
-
+if (stopDecode) stopDecode();
+stopDecode = null;
         if (navigator.vibrate) {
 
             navigator.vibrate([40, 30, 40]); 
@@ -672,10 +705,10 @@ if (zxingMultiReader) {
 
         ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
-        isScanning = true;
-
-        requestAnimationFrame(scanLoop);
-
+startZXingContinuousDecode();
+lastZXText = "";
+startZXingContinuousDecode();
+        
     }
 
 
@@ -713,3 +746,4 @@ if (zxingMultiReader) {
 </body>
 
 </html>
+
